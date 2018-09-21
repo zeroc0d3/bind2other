@@ -1,130 +1,124 @@
 # bind2other
 
-named.conf から、それとなるべく同等の動きをする NSD, Unbound, dnsdist のコンフィグを作る
+From the named.conf, make the configuration of NSD, Unbound, dnsdist with equivalent movement as much as possible
 
-  - [Internet Week 2016 DNSOPS.JP BoF プレゼン資料](http://dnsops.jp/bof/20161201/bind2other.pdf)
+  - [Internet Week 2016 DNSOPS.JP BoF presentation materials](http://dnsops.jp/bof/20161201/bind2other.pdf)
 
-## 使い方
+## How to use
 
 ```
 ./bind2other.py named.conf
 ```
 
-同じディレクトリに nsd.conf, unbound.conf, dnsdist.conf ができるので、それらを使ってnsd, unbound, dnsdistを起動する。
+Since nsd.conf, unbound.conf, dnsdist.conf can be created in the same directory, start nsd, unbound, dnsdist using them.
 
 ```
 sudo nsd -c nsd.conf
 sudo unbound -c unbound.conf
 sudo dnsdist -C dnsdist.conf -d
 
-dig @127.0.0.1 example.com    # ローカルゾーン
-dig @127.0.0.1 www.google.com # ローカルゾーン以外
+dig @ 127.0.0.1 example.com      # Local zone
+dig @ 127.0.0.1 www.google.com   # other than the local zone
 ```
 
-## 必要なもの
+## Requirements
   - Python 2.6
   - dnsdist 1.0.0
   - NSD4
   - Unbound
 
-## どのようなコンフィグができるか?
+## What kind of configuration can be done?
+  - Default [named.conf](./example/named.conf)
+  - Generated config file
+    - [dnsdist.conf](./example/dnsdist.conf)
+    - [nsd.conf](./example/nsd.conf)
+    - [unbound.conf](./example/unbound.conf)
 
-  - 元の [named.conf](https://github.com/hdais/bind2other/blob/master/example/named.conf)
-  - 生成されるコンフィグファイル
-    - [dnsdist.conf](https://github.com/hdais/bind2other/blob/master/example/dnsdist.conf)
-    - [nsd.conf](https://github.com/hdais/bind2other/blob/master/example/nsd.conf)
-    - [unbound.conf](https://github.com/hdais/bind2other/blob/master/example/unbound.conf)
-  
-
-### 基本的な動作
-
+### Basic Operation
 ```
-クライアント ---(クエリ受信)--> [dnsdist]
+Client --- (receive query) -> [dnsdist]
                                 |
-                                +--(qnameがローカルゾーン)---> [NSD]
+                                + - (qname is the local zone) ---> [NSD]
                                 |
-                                +--(ローカルゾーン以外)---> [Unbound]
+                                + - (except for the local zone) ---> [Unbound]
 ```
+dnsdist listens on 0.0.0.0: 53, [::]: 53 to receive queries from clients.
+When receiving DNS queries from clients,
 
-dnsdist はクライアントからクエリ受信するために 0.0.0.0:53, [::]:53 で待ち受ける。
-クライアントからDNSクエリを受信したら、
+  - NSD (127.0.0.1: 40000) if local zone (zone written in named.conf)
+  - If it is not a local zone, Unbound (127.0.0.1: 40001)
 
-  - ローカルゾーン (named.conf に書かれている zone) ならば NSD (127.0.0.1:40000)
-  - ローカルゾーン以外なら、Unbound (127.0.0.1:40001)
+Do forward.
 
-へフォーワードする。
+The NSD reads (or transfers zones) zones written in nsd.conf as a normal authority server and listens for queries at 127.0.0.1:40000.
 
-NSDは、通常の権威サーバとして nsd.conf に書かれたゾーンを読み込み (またはゾーン転送をして)、127.0.0.1:40000でクエリを待ち受ける。
+Unbound operates as a normal DNS resolver and listens for queries at 127.0.0.1:40001.
 
-Unboundは、通常のDNSリゾルバとして動作し、127.0.0.1:40001でクエリを待ち受ける。
+### Access restriction
 
-### アクセス制限
+  - Source IP queries that do not match allow - query are always REFUSED
+  - For queries to the local zone, forward to the NSD. However, if the query type is AXFR / IXFR, allow / deny according to allow-transfer (options, or each zone).
+  - Only queries of source IP that are not addressed to the local zone and match allow - recursion are forwarded to Unbound.
 
-  - allow-query にマッチしないソースIPのクエリは常にREFUSED
-  - ローカルゾーンへのクエリの場合、NSDにフォワードする。ただし、クエリタイプがAXFR/IXFRの場合は、allow-transfer (options、または各 zone) に従って許可・拒否を行う。
-  - ローカルソーン宛てではない、かつ allow-recursion にマッチするソースIPのクエリのみ、Unboundにフォワードされる。
-  
-## 対応する named.conf の機能
+## Function of corresponding named.conf
 
-BIND9のごく一部の機能のみ対応する
-
-### ACL
+Only a few functions of BIND 9 are supported
 ```
 acl mynetwork1 { 10.0.0.0/8; 192.168.0.0/16; };
 acl mynetwork2 { 192.0.2.1; };
-acl ournetwork { mynetwork1; mynetwork2; }; # ACLのネストもOK
+acl ournetwork { mynetwork1; mynetwork2; };   # ACL nesting is also OK.
 ```
-#### ACLでは否定の ! は使用不可
+#### Denial of negation in ACL can not be used
 ```
-# acl evil_in_the_internet { 0.0.0.0/0; ! 1.1.1.1; }; # "!" は不可
+# acl evil_in_the_internet { 0.0.0.0/0; ! 1.1.1.1; }; # "!" is not allowed
 ```
 
 ### options
 ```
 options {
-  directory "/etc";
-  allow-query { any; };                    # デフォルトは ANY (BIND9と同じ) 
-  allow-recursion { ournetwork; };         # デフォルトは none (BIND9は localhost; localnets) 
-  allow-transfer { mynetwork1; 1.1.1.1; }; # デフォルトは none (BIND9は any)
+  directory "/ etc";
+  allow-query {any;};                         # The default is ANY (same as BIND 9)
+  allow-recursion {ournetwork;};              # The default is none (BIND 9 is localhost; localnets)
+  allow-transfer {mynetwork1; 1.1.1.1;};      # The default is none (BIND 9 is any)
 };
 ```
 
 ### zone
 
-masterゾーンと slaveゾーンのみ。アクセス制限は allow-transfer のみ指定可。
+Only master and slave zones. You can only specify allow-transfer for access restriction.
 ```
 zone "example.com" {
   type master;
   file "example.com.zone";
-  allow-transfer { none; };  # optionsの allow-transferより優先
+  allow-transfer {none;};                     # option to override allow-transfer
 };
 
 zone "example2.com" {
   type slave;
-  masters { 10.0.0.1; 192.0.2.1; };
-  allow-transfer { mynetwork2; 127.0.0.1; }; # optionsの allow-transferより優先
+  masters {10.0.0.1; 192.0.2.1;};
+  allow-transfer {mynetwork 2; 127.0.0.1;};   # option to override allow-transfer
 };
 ```
 
 ### view
 
-match-clients のみ対応。
+Only correspond to match-clients.
 
-  - 元の [named.conf](https://github.com/hdais/bind2other/blob/master/example/view/named.conf)
-  - 生成されるコンフィグファイル
-    - [dnsdist.conf](https://github.com/hdais/bind2other/blob/master/example/view/dnsdist.conf)
-    - internal view用 nsd/unboundコンフィグ
-      - [nsd_internal.conf](https://github.com/hdais/bind2other/blob/master/example/view/nsd_internal.conf)
-      - [unbound_internal.conf](https://github.com/hdais/bind2other/blob/master/example/view/unbound_internal.conf)
-    - external view用 nsd/unboundコンフィグ
-      - [nsd_external.conf](https://github.com/hdais/bind2other/blob/master/example/view/nsd_external.conf)
-      - [unbound_external.conf](https://github.com/hdais/bind2other/blob/master/example/view/unbound_external.conf)
-    - デフォルトview用 nsd/unboundコンフィグ　
-      - [nsd.conf](https://github.com/hdais/bind2other/blob/master/example/view/nsd.conf)
-      - [unbound.conf](https://github.com/hdais/bind2other/blob/master/example/view/unbound.conf)
+  - Default [named.conf](./example/view/named.conf)
+  - Generated config file
+    - [dnsdist.conf](./example/view/dnsdist.conf)
+    - nsd / unbound config for internal view
+      - [nsd_internal.conf](./example/view/nsd_internal.conf)
+      - [unbound_internal.conf](./example/view/unbound_internal.conf)
+    - nsd / unbound config for external view
+      - [nsd_external.conf](./example/view/nsd_external.conf)
+      - [unbound_external.conf](./example/view/unbound_external.conf)
+    - nsd / unbound config for default view
+      - [nsd.conf](./example/view/nsd.conf)
+      - [unbound.conf](./example/view/unbound.conf)
 
-#### 起動方法
-dnsdist.confでdnsdistを、各viewに対応するコンフィグでnsd/unboundを起動
+#### starting method
+Invoke dnsdist in dnsdist.conf, nsd / unbound with config corresponding to each view
 
 ```
 sudo nsd -c nsd.conf
