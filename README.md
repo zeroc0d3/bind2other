@@ -45,8 +45,8 @@ Client --- (receive query) -> [dnsdist]
 dnsdist listens on 0.0.0.0: 53, [::]: 53 to receive queries from clients.
 When receiving DNS queries from clients,
 
-  - NSD (127.0.0.1: 40000) if local zone (zone written in named.conf)
-  - If it is not a local zone, Unbound (127.0.0.1: 40001)
+  - NSD (127.0.0.1:40000) if local zone (zone written in named.conf)
+  - If it is not a local zone, Unbound (127.0.0.1:40001)
 
 Do forward.
 
